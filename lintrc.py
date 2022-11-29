@@ -5,39 +5,27 @@ from pathlib import Path
 from colorama import Fore, init
 
 
-def follow(filename: Path, s: float = None) -> str:
-    if s is None:
-        s = 1.0
+def follow(filename: Path, sleep: float = None, tail=False) -> str:
+    if sleep is None:
+        sleep = 1.0
 
     with filename.open(mode='r') as f:
+        if tail:
+            f.seek(0, os.SEEK_END)
+
         while True:
             line = f.readline()
 
             if not line:
-                time.sleep(s)
+                time.sleep(sleep)
                 continue
 
             yield line
 
-
-trc = [
-    " 1)           756186   Sub   02  2  -- --                    00  EH  SR/TO ",
-    " 2)           781185   Sub   3C  8  -- -- -- -- -- -- -- --  00  EH  SR/TO ",
-    " 3)           806186   Pub   05  2  00 00                    7A  EH   ",
-    " 4)           831184   SubAL 02  0                           00  EH  SR/TO ",
-    " 5)           856183   Sub   3D  8  C1 38 FE FF 3F F0 3E 6D  FC  EH  CK ",
-    " 6)           881183   Pub   05  2  00 00                    7A  EH   ",
-    " 7)           906182   Sub   02  2  FC 7F                    41  EH  ",
-    " 8)           931181   Sub   01  8  C1 38 FE FF 3F F0 E6 6A  C3  EH "
-]
-
-
 def convert(line: str) -> dict:
     raw = line.split()
 
-    frame = {'raw': line}
-
-    frame |= dict(
+    frame = dict(
         zip(('number', 'timestamp', 'direction', 'id', 'length'), raw))
 
     len = int(frame.get('length', '0'))
@@ -45,7 +33,11 @@ def convert(line: str) -> dict:
     if len > 0:
         frame['data'] = raw[5:(5+len)]
 
-    frame |= dict(zip(('checksum', 'type', 'error'), raw[5+len:]), strict=True)
+    f = dict(zip(('checksum', 'type', 'error'), raw[5+len:]), strict=True)
+
+    frame = {**frame, **f}
+
+    frame['raw'] = line
 
     return frame
 
@@ -62,45 +54,84 @@ def _print(color: str, line: str):
     print(f"{color}{line}", end='')
 
 
-def main():
+def main(args):
     init(autoreset=True)
 
-    filter = {0x23}
     verbose = False
 
-    ltrc = Path(r"C:\Users\christoph.doerrer\Documents\Untitled.ltrc")
+    ltrc = Path(args.tracefile).with_suffix('.ltrc')
 
     if not ltrc.is_file():
-        ltrc = Path('Untitled.ltrc')
+        ltrc = Path(os.getenv('userprofile'), 'Documents').joinpath(
+            args.tracefile).with_suffix('.ltrc')
 
-    for line in follow(ltrc, s=0.1):
+    print(ltrc)
+
+    if args.filter is not None:
+        filter = [f"{int(i, base=0):02X}" for i in args.filter]
+    else:
+        filter = list()
+
+    for line in follow(ltrc, sleep=args.sleep, tail=args.tail):
         if line.startswith(';'):
             continue
 
         frame = convert(line)
 
-        if frame.get('error', None) is not None:
-            _print(Fore.RED, line)
-            continue
+        if args.error:
+            if frame.get('error', None) is not None:
+                _print(Fore.RED, line)
+                continue
 
-        if frame.get('id', '') == '3C':
-            _print(Fore.YELLOW, line)
-            continue
+        if args.diag:
+            if frame.get('id', None) == '3C':
+                _print(Fore.YELLOW, line)
+                continue
 
-        if frame.get('id', '') == '3D':
-            _print(Fore.GREEN, line)
-            continue
+            if frame.get('id', None) == '3D':
+                _print(Fore.GREEN, line)
+                continue
 
-        if frame.get('id', '') in [f"{i:02X}" for i in filter]:
-            _print(Fore.CYAN, line)
-            continue
+        if filter:
+            if frame.get('id', '') in filter:
+                _print(Fore.CYAN, line)
+                continue
 
-        if verbose is True:
+        if args.verbose:
             _print(Fore.RESET, line)
 
 
+def arguments():
+    import argparse
+
+    p = argparse.ArgumentParser(
+        description='load *.ltrc readonly continually and print message into stdout')
+    p.add_argument('tracefile', help='peak-can *.ltrc')
+    p.add_argument(
+        '-f', '--filter', help="specify multiple id's which are shown in CYAN ",
+        nargs='*', default=None, type=str
+    )
+    p.add_argument(
+        '-e', '--error', help='print all messages in RED where an error occured', action='store_true')
+    p.add_argument(
+        '-d', '--diag', help='show diagnostic requests 0x3C in YELLOW and responses 0x3D green', action='store_true')
+    p.add_argument(
+        '-v', '--verbose',
+        help='display all messages other messages in WHITE', action='store_true'
+    )
+    p.add_argument(
+        '-s', '--sleep', help='polling time in seconds for tailing the ltrc file', type=float, default=0.1
+    )
+    p.add_argument(
+        '-t', '--tail', help='display only new added lines in file', action='store_true')
+
+    return p.parse_args()
+
+
 if __name__ == '__main__':
+    args = arguments()
+
     try:
-        main()
+        main(args)
     except KeyboardInterrupt:
         print('done')
