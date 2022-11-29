@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from colorama import Fore, init
+import csv
 
 
 def follow(filename: Path, sleep: float = None, tail=False) -> str:
@@ -21,6 +22,7 @@ def follow(filename: Path, sleep: float = None, tail=False) -> str:
                 continue
 
             yield line
+
 
 def convert(line: str) -> dict:
     raw = line.split()
@@ -49,15 +51,42 @@ def trace(msg: dict) -> str:
     return f"{time:>10.0f} {msg['id']:>4s} {msg['length']:>3s}  {data:<26s} {msg.get('error', '')}"
 
 
-def _print(color: str, line: str):
+colors = {
+    Fore.BLACK: 'BLACK',
+    Fore.RED: 'RED',
+    Fore.GREEN: 'GREEN',
+    Fore.YELLOW: 'YELLOW',
+    Fore.BLUE: 'BLUE',
+    Fore.MAGENTA: 'MAGENTA',
+    Fore.CYAN: 'CYAN',
+    Fore.WHITE: 'WHITE',
+    Fore.RESET: '',
+    Fore.LIGHTBLACK_EX: 'LIGHTBLACK_EX',
+    Fore.LIGHTRED_EX: 'LIGHTRED_EX',
+    Fore.LIGHTGREEN_EX: 'LIGHTGREEN_EX',
+    Fore.LIGHTYELLOW_EX: 'LIGHTYELLOW_EX',
+    Fore.LIGHTBLUE_EX: 'LIGHTBLUE_EX',
+    Fore.LIGHTMAGENTA_EX: 'LIGHTMAGENTA_EX',
+    Fore.LIGHTCYAN_EX: 'LIGHTCYAN_EX',
+    Fore.LIGHTWHITE_EX: 'LIGHTWHITE_EX',
+}
 
-    print(f"{color}{line}", end='')
+
+def _print(color: str, frame: dict, writer:csv.DictWriter=None):
+
+    line = frame.get('raw', None)
+
+    if line:
+        print(f"{color}{line}", end='')
+
+        frame['color'] = colors[color]
+
+        if writer:
+            writer.writerow(frame)
 
 
 def main(args):
     init(autoreset=True)
-
-    verbose = False
 
     ltrc = Path(args.tracefile).with_suffix('.ltrc')
 
@@ -71,34 +100,44 @@ def main(args):
         filter = [f"{int(i, base=0):02X}" for i in args.filter]
     else:
         filter = list()
+    
+    my_csv = ltrc.with_suffix('.csv')
 
-    for line in follow(ltrc, sleep=args.sleep, tail=args.tail):
-        if line.startswith(';'):
-            continue
+    print(my_csv)
 
-        frame = convert(line)
+    with my_csv.open( 'w', newline='') as cvsfile:
+        header = ['number', 'timestamp', 'direction', 'id', 'data', 'length', 'checksum', 'type', 'error', 'color']
+        writer = csv.DictWriter(cvsfile, fieldnames=header, restval='', extrasaction='ignore', delimiter=';', quoting=csv.QUOTE_ALL)
 
-        if args.error:
-            if frame.get('error', None) is not None:
-                _print(Fore.RED, line)
+        writer.writeheader()
+
+        for line in follow(ltrc, sleep=args.sleep, tail=args.tail):
+            if line.startswith(';'):
                 continue
 
-        if args.diag:
-            if frame.get('id', None) == '3C':
-                _print(Fore.YELLOW, line)
-                continue
+            frame = convert(line)
 
-            if frame.get('id', None) == '3D':
-                _print(Fore.GREEN, line)
-                continue
+            if args.error:
+                if frame.get('error', None) is not None:
+                    _print(Fore.RED, frame, writer)
+                    continue
 
-        if filter:
-            if frame.get('id', '') in filter:
-                _print(Fore.CYAN, line)
-                continue
+            if args.diag:
+                if frame.get('id', None) == '3C':
+                    _print(Fore.YELLOW, frame, writer)
+                    continue
 
-        if args.verbose:
-            _print(Fore.RESET, line)
+                if frame.get('id', None) == '3D':
+                    _print(Fore.GREEN, frame, writer)
+                    continue
+
+            if filter:
+                if frame.get('id', '') in filter:
+                    _print(Fore.CYAN, frame, writer)
+                    continue
+
+            if args.verbose:
+                _print(Fore.RESET, frame, writer)
 
 
 def arguments():
